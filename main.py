@@ -8,6 +8,7 @@ import numpy as np
 from skimage.color import rgb2hsv
 import seaborn as sns
 import matplotlib.pyplot as plt
+import geopandas as gpd
 
 
 def _files(path):
@@ -37,6 +38,7 @@ def _ndvi(red, nir):
 
 
 def _hls(mir, nir, red):
+
     rgb = np.dstack((mir[0]/1e4, nir[0]/1e4, red[0]/1e4))
     return rgb2hsv(rgb)
 
@@ -47,30 +49,91 @@ def _normalizer(dataset):
     return (data-data.mean())/data.std()
 
 
+def _indexes(B04, B8A, B11):
+
+    NDVI_v = _ndvi(B04.data, B8A.data)
+    H_v = _hls(B11.data, B8A.data, B04.data)
+
+    x = B04.x
+    y = B04.y
+
+    NDVI = xr.DataArray(NDVI_v[0, :, :], dims=('y', 'x'), coords={'x': x, 'y': y})
+    H = xr.DataArray(H_v[:, :, 0], dims=('y', 'x'), coords={'x': x, 'y': y})
+
+    return NDVI, H
+
+
+def _poi(f_path, date, value):
+
+    table = gpd.read_file(f_path)
+
+    # TODO add a date range selection
+    sub_table = table[table.LC == value]
+    # cleaned = sub_table.drop('')
+
+    return sub_table
+
+
+def _selection(NDVI, H):
+
+    NDVI_pos = np.where(NDVI < 0, np.nan, NDVI)
+    NDVI_flat = np.where(NDVI > 0.5, np.nan, NDVI_pos).flatten()
+    H = H * 360.
+    H_flat = np.where(H > 80, np.nan, H).flatten()
+
+    bad = ~np.logical_or(np.isnan(NDVI_flat), np.isnan(H_flat))
+    NDVI_cln = np.compress(bad, NDVI_flat)
+    H_cln = np.compress(bad, H_flat)
+
+    return NDVI_cln, H_cln
+
+
+def _point_extraction(da, xy_poi):
+
+    values = []
+    for index, row in xy_poi.iterrows():
+        values.append(da.sel(x=row.x, y=row.y, method="nearest").data)
+
+    values = np.array(values)
+    return values
+
+
 if __name__ == '__main__':
 
-    path = r'D:\Data\HSL\S2Mosaic'
+    path = r'C:\Data\HSV\Observations'
 
     for (dirpath, dirnames, filenames) in os.walk(path):
         for dirname in dirnames:
             bands_pth = _files(os.sep.join([dirpath, dirname]))
 
-            B04 = rs.open(bands_pth['B04']).read().astype(np.float)
-            B08 = rs.open(bands_pth['B08']).read().astype(np.float)
-            B8A = rs.open(bands_pth['B8A']).read().astype(np.float)
-            B11 = rs.open(bands_pth['B11']).read().astype(np.float)
+            B04 = xr.open_rasterio(bands_pth['B04'])
+            B08 = xr.open_rasterio(bands_pth['B08'])
+            B8A = xr.open_rasterio(bands_pth['B8A'])
+            B11 = xr.open_rasterio(bands_pth['B11'])
 
-            NDVI = _ndvi(B04, B8A)
-            H = _hls(B11, B8A, B04)
+            date = None
 
-            NDVI_flat = np.where(NDVI < 0, np.nan, NDVI)
-            NDVI_flat = np.where(NDVI > 0.5, np.nan, NDVI).flatten()
-            H = H[:, :, 0]*360.
-            H_flat = np.where(H > 80, np.nan, H).flatten()
+            # TODO valido solo su una data
+            xy_poi_g = _poi(r'C:\Data\HSV\POI\points.dbf', date, 1)
+            xy_poi_b = _poi(r'C:\Data\HSV\POI\points.dbf', date, 0)
 
-            bad = ~np.logical_or(np.isnan(NDVI_flat), np.isnan(H_flat))
-            NDVI_cln = np.compress(bad, NDVI_flat)
-            H_cln = np.compress(bad, H_flat)
+            NDVI_g, H_g = _indexes(B04, B8A, B11)
+            NDVI_b, H_b = _indexes(B04, B8A, B11)
+
+            NDVI_g = _point_extraction(NDVI_g, xy_poi_g)
+            H_g = _point_extraction(H_g, xy_poi_g)
+
+            NDVI_b = _point_extraction(NDVI_b, xy_poi_b)
+            H_b = _point_extraction(H_b, xy_poi_b)
+
+            NDVI_rdc_g, H_rdc_g = _selection(NDVI_g, H_g)
+            NDVI_rdc_b, H_rdc_b = _selection(NDVI_b, H_b)
+
+            plt.figure(figsize=(20, 10))
+            plt.scatter(x=NDVI_rdc_g, y=H_rdc_g, s=5, marker='<', c='green')
+            plt.scatter(x=NDVI_rdc_b, y=H_rdc_b, s=5, marker='>', c='red')
+
+            plt.show()
 
             # size = 25000
             #
@@ -82,14 +145,14 @@ if __name__ == '__main__':
             #
             # plt.figure(figsize=(20, 10))
             #
-            MB_matrix = np.zeros((NDVI_cln.size, 2))
+            # MB_matrix = np.zeros((NDVI_cln.size, 2))
+            #
+            # MB_matrix[:, 0] = NDVI_cln
+            # MB_matrix[:, 1] = H_cln
+            #
+            # plt.scatter(x=MB_matrix[:, 0], y=MB_matrix[:, 1], s=1, marker='2')
 
-            MB_matrix[:, 0] = NDVI_cln
-            MB_matrix[:, 1] = H_cln
-
-            plt.scatter(x=MB_matrix[:, 0], y=MB_matrix[:, 1], s=1, marker='2')
-
-            plt.show()
+            # plt.show()
 
 
 
